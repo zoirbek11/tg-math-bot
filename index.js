@@ -1,15 +1,27 @@
 const { Telegraf, Markup } = require('telegraf');
 const http = require('http');
+const axios = require('axios'); // O'z-o'zini uyg'otish uchun kerak
 
-// Render uchun Web Server (Botni o'chib qolishdan saqlaydi)
-const PORT = process.env.PORT || 3001; // 3000 ni 3001 ga o'zgartiring
+// 1. Render uchun Web Server va Uyg'otish tizimi
+const PORT = process.env.PORT || 3001;
+const RENDER_URL = `https://tg-math-bot.onrender.com`; // Render'dagi bot manzilingiz
+
 http.createServer((req, res) => {
     res.writeHead(200);
     res.end('Bot is alive!');
-}).listen(PORT);
+}).listen(PORT, () => {
+    console.log(`Server ${PORT}-portda ishlamoqda`);
+});
 
+// O'z-o'zini har 14 daqiqada "ping" qilish (uxlab qolmaslik uchun)
+setInterval(() => {
+    axios.get(RENDER_URL)
+        .then(() => console.log('Self-ping muvaffaqiyatli: Bot uyg\'oq!'))
+        .catch((err) => console.error('Self-ping xatosi:', err.message));
+}, 14 * 60 * 1000); 
+
+// 2. Bot sozlamalari
 const bot = new Telegraf('8673328872:AAFwiVspGxGgz6vfbsYvekHOET2n2yCEo5Y');
-
 const usersData = {};
 
 const strings = {
@@ -66,6 +78,7 @@ const strings = {
     }
 };
 
+// Savol yaratish funksiyasi
 function generateQuestion(level) {
     let qText, ans;
     if (['Oson', 'Легкий', 'Easy'].includes(level)) {
@@ -89,6 +102,7 @@ function generateQuestion(level) {
     return { qText, ans, options };
 }
 
+// Katalog yuborish
 function sendCatalog(ctx) {
     const user = usersData[ctx.from.id];
     if(!user) return showLangMenu(ctx);
@@ -153,6 +167,7 @@ function sendQuestion(ctx) {
     ).catch(() => {});
 }
 
+// Bot komandalari va harakatlari
 bot.start((ctx) => showLangMenu(ctx));
 
 bot.action(/set_lang_(UZ|RU|EN)/, (ctx) => {
@@ -218,4 +233,8 @@ bot.action(/ans_(-?\d+)/, async (ctx) => {
 
 bot.action('go_catalog', (ctx) => sendCatalog(ctx));
 
-bot.launch().then(() => console.log("Bot Render-ga tayyor!"));
+bot.launch().then(() => console.log("Bot Render-da muvaffaqiyatli ishga tushdi!"));
+
+// Xatolarni ushlash
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
