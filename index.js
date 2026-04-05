@@ -1,10 +1,11 @@
 const { Telegraf, Markup } = require('telegraf');
 const http = require('http');
-const axios = require('axios'); // O'z-o'zini uyg'otish uchun kerak
+const axios = require('axios');
 
-// 1. Render uchun Web Server va Uyg'otish tizimi
+// 1. Render uchun Web Server
 const PORT = process.env.PORT || 3001;
-const RENDER_URL = `https://tg-math-bot.onrender.com`; // Render'dagi bot manzilingiz
+const RENDER_URL = `https://tg-math-bot.onrender.com`;
+const API_URL = "https://tgbot-api.onrender.com/api/questions";
 
 http.createServer((req, res) => {
     res.writeHead(200);
@@ -13,11 +14,8 @@ http.createServer((req, res) => {
     console.log(`Server ${PORT}-portda ishlamoqda`);
 });
 
-// O'z-o'zini har 14 daqiqada "ping" qilish (uxlab qolmaslik uchun)
 setInterval(() => {
-    axios.get(RENDER_URL)
-        .then(() => console.log('Self-ping muvaffaqiyatli: Bot uyg\'oq!'))
-        .catch((err) => console.error('Self-ping xatosi:', err.message));
+    axios.get(RENDER_URL).catch(() => {});
 }, 14 * 60 * 1000); 
 
 // 2. Bot sozlamalari
@@ -27,12 +25,10 @@ const usersData = {};
 const strings = {
     UZ: {
         welcome: "Matematika Marafoniga xush kelibsiz! Tilni tanlang:",
-        chooseLevel: "Darajani tanlang:",
         catalog: "Matchlar katalogi:",
         back: "⬅️ Orqaga",
         match: "Match",
         score: "Natija",
-        question: "Savol",
         correct: "To'g'ri! ✅",
         wrong: "Xato! ❌ Javob:",
         finished: "Match yakunlandi!",
@@ -40,16 +36,14 @@ const strings = {
         confirmExit: "Matchni tark etmoqchimisiz?",
         yes: "Ha, chiqish",
         no: "Yo'q, davom etish",
-        levels: ['Oson', 'O\'rtacha', 'Qiyin']
+        noQuestions: "Hozircha bazada savollar yo'q. Admin panelga murojaat qiling."
     },
     RU: {
         welcome: "Добро пожаловать в Марафон! Выберите язык:",
-        chooseLevel: "Выберите уровень:",
         catalog: "Каталог матчей:",
         back: "⬅️ Назад",
         match: "Матч",
         score: "Результат",
-        question: "Вопрос",
         correct: "Правильно! ✅",
         wrong: "Ошибка! ❌ Ответ:",
         finished: "Матч завершен!",
@@ -57,16 +51,14 @@ const strings = {
         confirmExit: "Хотите покинуть матч?",
         yes: "Да, выйти",
         no: "Нет, продолжить",
-        levels: ['Легкий', 'Средний', 'Сложный']
+        noQuestions: "В базе пока нет вопросов."
     },
     EN: {
         welcome: "Welcome to the Marathon! Choose language:",
-        chooseLevel: "Choose level:",
         catalog: "Match Catalog:",
         back: "⬅️ Back",
         match: "Match",
         score: "Score",
-        question: "Question",
         correct: "Correct! ✅",
         wrong: "Wrong! ❌ Answer:",
         finished: "Match finished!",
@@ -74,57 +66,72 @@ const strings = {
         confirmExit: "Do you want to exit the match?",
         yes: "Yes, exit",
         no: "No, continue",
-        levels: ['Easy', 'Medium', 'Hard']
+        noQuestions: "No questions in the database yet."
     }
 };
 
-// Savol yaratish funksiyasi
-function generateQuestion(level) {
-    let qText, ans;
-    if (['Oson', 'Легкий', 'Easy'].includes(level)) {
-        let a = Math.floor(Math.random() * 50) + 1;
-        let b = Math.floor(Math.random() * 50) + 1;
-        let op = Math.random() > 0.5 ? '+' : '-';
-        ans = op === '+' ? a + b : a - b;
-        qText = `${a} ${op} ${b} = ?`;
-    } else if (['O\'rtacha', 'Средний', 'Medium'].includes(level)) {
-        let a = Math.floor(Math.random() * 20) + 2;
-        let b = Math.floor(Math.random() * 15) + 2;
-        ans = a * b;
-        qText = `${a} * ${b} = ?`;
-    } else {
-        let a = Math.floor(Math.random() * 150) + 50;
-        let b = 2;
-        ans = Math.pow(a * b, 2);
-        qText = `(${a} * ${b})² = ?`;
+// API-dan savollarni yuklab olish
+async function fetchQuestions() {
+    try {
+        const response = await axios.get(API_URL);
+        return response.data; // [{id, qText, ans}, ...]
+    } catch (error) {
+        console.error("API Error:", error.message);
+        return [];
     }
-    const options = [ans, ans + Math.floor(Math.random() * 5 + 1), ans - Math.floor(Math.random() * 5 + 1)].sort(() => Math.random() - 0.5);
-    return { qText, ans, options };
 }
 
-// Katalog yuborish
+// Savol yuborish (API-dan olingan savollar orasidan)
+async function sendQuestion(ctx) {
+    const user = usersData[ctx.from.id];
+    const lang = strings[user.lang];
+    
+    if (user.questionsList.length === 0) {
+        return ctx.reply(lang.noQuestions);
+    }
+
+    // Navbatdagi savolni olish
+    const qData = user.questionsList[user.step];
+    if (!qData) return;
+
+    user.currentAnswer = parseInt(qData.ans);
+    user.step++;
+
+    // Variantlarni generatsiya qilish (To'g'ri javob + 2 ta tasodifiy xato javob)
+    const ans = user.currentAnswer;
+    const options = [
+        ans, 
+        ans + Math.floor(Math.random() * 5 + 1), 
+        ans - Math.floor(Math.random() * 5 + 1)
+    ].sort(() => Math.random() - 0.5);
+
+    const answerRow = options.map(o => Markup.button.callback(o.toString(), `ans_${o}`));
+    const navRow = [Markup.button.callback(lang.back, 'confirm_exit')];
+    
+    const text = `🔥 Match ${user.activeMatch} | ${user.step}/${user.maxSteps}\n\n${qData.qText} = ?`;
+    
+    try {
+        await ctx.editMessageText(text, Markup.inlineKeyboard([answerRow, navRow]));
+    } catch (e) {
+        await ctx.reply(text, Markup.inlineKeyboard([answerRow, navRow]));
+    }
+}
+
 function sendCatalog(ctx) {
     const user = usersData[ctx.from.id];
     if(!user) return showLangMenu(ctx);
     const lang = strings[user.lang];
     const buttons = [];
 
-    for (let i = 1; i <= 10; i++) {
+    for (let i = 1; i <= 5; i++) { // Katalogda 5 ta match
         const score = user.matches[i];
-        let label;
-        if (score !== undefined) {
-            let emoji = score === 10 ? "🏆" : score >= 7 ? "😎" : score >= 4 ? "😐" : "☹️";
-            label = `${emoji} ${lang.match} ${i} (${score}/10)`;
-        } else {
-            label = `⚪️ ${lang.match} ${i}`;
-        }
+        let label = score !== undefined ? `✅ Match ${i} (${score}/10)` : `⚪️ Match ${i}`;
         buttons.push(Markup.button.callback(label, `start_match_${i}`));
     }
 
-    const navBtn = [Markup.button.callback(lang.back, 'back_to_levels')];
-    const keyboard = Markup.inlineKeyboard([...buttons.map(b => [b]), navBtn]);
-    
-    const text = `${lang.catalog}\n🏆 Daraja: ${user.level}`;
+    const keyboard = Markup.inlineKeyboard([...buttons.map(b => [b])]);
+    const text = lang.catalog;
+
     if (ctx.callbackQuery) {
         ctx.editMessageText(text, keyboard).catch(() => {});
     } else {
@@ -133,78 +140,38 @@ function sendCatalog(ctx) {
 }
 
 function showLangMenu(ctx, edit = false) {
-    const text = strings.UZ.welcome;
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('🇺🇿 UZ', 'set_lang_UZ')],
         [Markup.button.callback('🇷🇺 RU', 'set_lang_RU')],
         [Markup.button.callback('🇺🇸 EN', 'set_lang_EN')]
     ]);
+    const text = strings.UZ.welcome;
     return edit ? ctx.editMessageText(text, keyboard).catch(() => {}) : ctx.reply(text, keyboard);
 }
 
-function showLevelMenu(ctx) {
-    const user = usersData[ctx.from.id];
-    const lang = strings[user.lang];
-    const keyboard = Markup.inlineKeyboard([
-        ...lang.levels.map(l => [Markup.button.callback(l, `set_level_${l}`)]),
-        [Markup.button.callback(lang.back, 'back_to_lang')]
-    ]);
-    ctx.editMessageText(lang.chooseLevel, keyboard).catch(() => {});
-}
-
-function sendQuestion(ctx) {
-    const user = usersData[ctx.from.id];
-    const lang = strings[user.lang];
-    const q = generateQuestion(user.level);
-    user.currentAnswer = q.ans;
-    user.step++;
-
-    const answerRow = q.options.map(o => Markup.button.callback(o.toString(), `ans_${o}`));
-    const navRow = [Markup.button.callback(lang.back, 'confirm_exit')];
-    
-    ctx.editMessageText(`🔥 Match ${user.activeMatch} | ${user.step}/10\n\n${q.qText}`, 
-        Markup.inlineKeyboard([answerRow, navRow])
-    ).catch(() => {});
-}
-
-// Bot komandalari va harakatlari
 bot.start((ctx) => showLangMenu(ctx));
 
 bot.action(/set_lang_(UZ|RU|EN)/, (ctx) => {
     usersData[ctx.from.id] = { lang: ctx.match[1], matches: {} };
-    showLevelMenu(ctx);
-});
-
-bot.action('back_to_lang', (ctx) => showLangMenu(ctx, true));
-bot.action('back_to_levels', (ctx) => showLevelMenu(ctx));
-
-bot.action(/set_level_(.+)/, (ctx) => {
-    const user = usersData[ctx.from.id];
-    if (!user) return showLangMenu(ctx, true);
-    user.level = ctx.match[1];
     sendCatalog(ctx);
 });
 
-bot.action(/start_match_(\d+)/, (ctx) => {
+bot.action(/start_match_(\d+)/, async (ctx) => {
     const user = usersData[ctx.from.id];
     const matchId = parseInt(ctx.match[1]);
-    if (user.matches[matchId] !== undefined) return ctx.answerCbQuery(strings[user.lang].finished);
+
+    const allQuestions = await fetchQuestions();
+    if (allQuestions.length === 0) return ctx.answerCbQuery(strings[user.lang].noQuestions);
+
+    // Savollarni aralashtirish va 10 tasini olish
+    user.questionsList = allQuestions.sort(() => Math.random() - 0.5).slice(0, 10);
     user.activeMatch = matchId;
     user.step = 0;
+    user.maxSteps = user.questionsList.length;
     user.currentMatchScore = 0;
+
     sendQuestion(ctx);
 });
-
-bot.action('confirm_exit', (ctx) => {
-    const lang = strings[usersData[ctx.from.id].lang];
-    ctx.editMessageText(lang.confirmExit, Markup.inlineKeyboard([
-        [Markup.button.callback(lang.yes, 'exit_match')],
-        [Markup.button.callback(lang.no, 'resume_match')]
-    ])).catch(() => {});
-});
-
-bot.action('resume_match', (ctx) => { usersData[ctx.from.id].step--; sendQuestion(ctx); });
-bot.action('exit_match', (ctx) => { usersData[ctx.from.id].activeMatch = null; sendCatalog(ctx); });
 
 bot.action(/ans_(-?\d+)/, async (ctx) => {
     const user = usersData[ctx.from.id];
@@ -219,22 +186,32 @@ bot.action(/ans_(-?\d+)/, async (ctx) => {
         await ctx.answerCbQuery(`${lang.wrong} ${user.currentAnswer}`);
     }
 
-    if (user.step < 10) {
+    if (user.step < user.maxSteps) {
         sendQuestion(ctx);
     } else {
         user.matches[user.activeMatch] = user.currentMatchScore;
         const finalS = user.currentMatchScore;
+        const total = user.maxSteps;
         user.activeMatch = null;
-        await ctx.editMessageText(`${lang.finished}\n${lang.score}: ${finalS}/10`,
+        await ctx.editMessageText(`${lang.finished}\n${lang.score}: ${finalS}/${total}`,
             Markup.inlineKeyboard([[Markup.button.callback(lang.goCatalog, 'go_catalog')]])
         ).catch(() => {});
     }
 });
 
+bot.action('confirm_exit', (ctx) => {
+    const lang = strings[usersData[ctx.from.id].lang];
+    ctx.editMessageText(lang.confirmExit, Markup.inlineKeyboard([
+        [Markup.button.callback(lang.yes, 'exit_match')],
+        [Markup.button.callback(lang.no, 'resume_match')]
+    ])).catch(() => {});
+});
+
+bot.action('resume_match', (ctx) => { usersData[ctx.from.id].step--; sendQuestion(ctx); });
+bot.action('exit_match', (ctx) => { usersData[ctx.from.id].activeMatch = null; sendCatalog(ctx); });
 bot.action('go_catalog', (ctx) => sendCatalog(ctx));
 
-bot.launch().then(() => console.log("Bot Render-da muvaffaqiyatli ishga tushdi!"));
+bot.launch().then(() => console.log("Bot API bilan ishga tushdi!"));
 
-// Xatolarni ushlash
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
